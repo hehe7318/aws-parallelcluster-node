@@ -135,6 +135,8 @@ def _self_terminate():
     # TOFIX WORKAROUND: We kill Slurm processes because we observed in 3.13.0 on Ubuntu24.04
     # that the shutdown hangs waiting for these processes to terminate.
     run_command("sudo killall -9 --quiet slurmd slurmstepd")
+    # Wait for 30 seconds for killall command running
+    time.sleep(30)
     log.info("Self terminating instance now!")
     run_command("sudo shutdown -h now")
 
