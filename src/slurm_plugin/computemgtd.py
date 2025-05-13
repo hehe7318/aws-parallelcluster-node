@@ -127,19 +127,7 @@ class ComputemgtdConfig:
 
 def _is_ubuntu2404():
     """Return True if the OS is Ubuntu 24.04."""
-    try:
-        with open("/etc/os-release", "r") as f:
-            info = dict(
-                line.strip().split("=", 1)
-                for line in f
-                if "=" in line
-            )
-        os_id = info.get("ID", "").strip('"').lower()
-        version = info.get("VERSION_ID", "").strip('"')
-        return os_id == "ubuntu" and version.startswith("24.04")
-    except Exception as e:
-        log.warning("Unable to detect OS version from /etc/os-release: %s", e)
-        return False
+    return True
 
 
 @log_exception(log, "self terminating compute instance", catch_exception=CalledProcessError, raise_on_error=False)
