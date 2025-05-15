@@ -127,8 +127,16 @@ class ComputemgtdConfig:
 
 def _is_ubuntu2404():
     """Return True if the OS is Ubuntu 24.04."""
-    _wall("Test! Assume it's ubuntu24, return true.")
-    return True
+    try:
+        _wall("Start to detect if is ubutnu24")
+        with open("/etc/os-release", "r") as f:
+            info = dict(line.strip().split("=", 1) for line in f if "=" in line)
+        os_id = info.get("ID", "").strip('"').lower()
+        version = info.get("VERSION_ID", "").strip('"')
+        return os_id == "ubuntu" and version.startswith("24.04")
+    except Exception as e:
+        log.warning("Unable to detect OS version from /etc/os-release: %s", e)
+        return False
 
 
 def _wall(message: str):
@@ -147,17 +155,20 @@ def _self_terminate():
     time.sleep(10)
     _wall("Start to detect OS")
     if _is_ubuntu2404():
+        _wall("It's ubuntu24!!")
         _wall("Going to run poweroff --force!")
         shutdown_cmd = "sudo systemctl poweroff --force"
         log.info("Detected Ubuntu 24.04 – using `%s`", shutdown_cmd)
     else:
+        _wall("It is not ubuntu24.")
         _wall("Going to run shutdown -h now!")
         shutdown_cmd = "sudo shutdown -h now"
         log.info("Using default shutdown command `%s`", shutdown_cmd)
 
     log.info("Self terminating instance now!")
-    _wall("Sleep 10m! Test!")
-    time.sleep(600)
+    _wall("Sleep 2m! Test!")
+    run_command("sleep 120")
+    time.sleep(120)
     run_command(shutdown_cmd)
 
 
