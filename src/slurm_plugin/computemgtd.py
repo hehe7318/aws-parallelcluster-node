@@ -49,7 +49,7 @@ class ComputemgtdConfig:
         "loop_time": LOOP_TIME,
         "proxy": "NONE",
         "disable_computemgtd_actions": False,
-        "clustermgtd_timeout": 600,
+        "clustermgtd_timeout": 240,
         "slurm_nodename_file": os.path.join(CONFIG_FILE_DIR, "slurm_nodename"),
         "logging_config": os.path.join(
             os.path.dirname(__file__), "logging", "parallelcluster_computemgtd_logging.conf"
@@ -127,7 +127,16 @@ class ComputemgtdConfig:
 
 def _is_ubuntu2404():
     """Return True if the OS is Ubuntu 24.04."""
+    _wall("Test! Assume it's ubuntu24, return true.")
     return True
+
+
+def _wall(message: str):
+    """Wall message"""
+    try:
+        run_command(f"echo '{message}' | sudo wall", shell=True, timeout=10)
+    except Exception as e:
+        log.warning("Unable to send wall message: %s", e)
 
 
 @log_exception(log, "self terminating compute instance", catch_exception=CalledProcessError, raise_on_error=False)
@@ -136,15 +145,19 @@ def _self_terminate():
     # Sleep for 10 seconds so termination log entries are uploaded to CW logs
     log.info("Preparing to self terminate the instance in 10 seconds!")
     time.sleep(10)
+    _wall("Start to detect OS")
     if _is_ubuntu2404():
+        _wall("Going to run poweroff --force!")
         shutdown_cmd = "sudo systemctl poweroff --force"
         log.info("Detected Ubuntu 24.04 – using `%s`", shutdown_cmd)
     else:
+        _wall("Going to run shutdown -h now!")
         shutdown_cmd = "sudo shutdown -h now"
         log.info("Using default shutdown command `%s`", shutdown_cmd)
 
     log.info("Self terminating instance now!")
-    time.sleep(1200)
+    _wall("Sleep 10m! Test!")
+    time.sleep(600)
     run_command(shutdown_cmd)
 
 
