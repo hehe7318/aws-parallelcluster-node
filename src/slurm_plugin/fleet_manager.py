@@ -21,6 +21,7 @@ from common.ec2_utils import get_private_ip_address_and_dns_name
 from common.utils import setup_logging_filter
 from retrying import retry
 from slurm_plugin.common import print_with_count
+from slurm_plugin.slurm_resources import RUNNING_INSTANCES_FILE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -193,17 +194,29 @@ class FleetManager(ABC):
             launch_params = self._evaluate_launch_params(count)
             assigned_nodes = self._launch_instances(launch_params)
             if len(assigned_nodes.get("Instances")) > 0:
-                instance_ids = [instance.get("InstanceId") for instance in assigned_nodes.get("Instances") if instance.get("InstanceId") ]
+                instance_ids = [
+                    instance.get("InstanceId")
+                    for instance in assigned_nodes.get("Instances")
+                    if instance.get("InstanceId")
+                ]
                 logger.info(
                     "Launched the following instances %s",
                     print_with_count(instance_ids),
                 )
                 logger.debug("Launched instances information: %s", assigned_nodes.get("Instances"))
-                running_nodes_file_path = "/etc/parallelcluster/slurm_plugin/running_nodes"
-                with open(running_nodes_file_path, "a") as f:
-                    f.write('\n'.join(instance_ids)+'\n')
+                self._track_launched_instances(instance_ids)
 
         return [EC2Instance.from_describe_instance_data(instance_info) for instance_info in assigned_nodes["Instances"]]
+
+    @staticmethod
+    def _track_launched_instances(instance_ids):
+        """Append launched instance IDs to the tracking file."""
+
+        try:
+            with open(RUNNING_INSTANCES_FILE_PATH, "a") as f:
+                f.write("\n".join(instance_ids) + "\n")
+        except Exception as e:
+            logger.warning("Failed to write launched instance IDs to tracking file: %s", e)
 
 
 class Ec2RunInstancesManager(FleetManager):

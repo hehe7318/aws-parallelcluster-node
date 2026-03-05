@@ -37,6 +37,7 @@ EC2_SCHEDULED_EVENT_CODES = [
 
 
 CONFIG_FILE_DIR = "/etc/parallelcluster/slurm_plugin"
+RUNNING_INSTANCES_FILE_PATH = f"{CONFIG_FILE_DIR}/running_instances"
 
 
 class PartitionStatus(Enum):

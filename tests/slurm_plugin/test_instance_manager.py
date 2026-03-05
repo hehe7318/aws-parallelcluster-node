@@ -751,7 +751,7 @@ class TestInstanceManager:
         "mock_kwargs, mocked_boto3_request, expected_parsed_result, job_level_scaling",
         [
             pytest.param(
-                {"include_head_node": False, "alive_states_only": True},
+                {"include_head_node": False},
                 MockedBoto3Request(
                     method="describe_instances",
                     response={
@@ -810,7 +810,7 @@ class TestInstanceManager:
                 id="default",
             ),
             pytest.param(
-                {"include_head_node": False, "alive_states_only": True},
+                {"include_head_node": False},
                 MockedBoto3Request(
                     method="describe_instances",
                     response={"Reservations": []},
@@ -829,7 +829,7 @@ class TestInstanceManager:
                 id="empty_response",
             ),
             pytest.param(
-                {"include_head_node": True, "alive_states_only": False},
+                {"include_head_node": True},
                 MockedBoto3Request(
                     method="describe_instances",
                     response={
@@ -856,17 +856,20 @@ class TestInstanceManager:
                         ]
                     },
                     expected_params={
-                        "Filters": [{"Name": "tag:parallelcluster:cluster-name", "Values": ["hit"]}],
+                        "Filters": [
+                            {"Name": "tag:parallelcluster:cluster-name", "Values": ["hit"]},
+                            {"Name": "instance-state-name", "Values": list(EC2_INSTANCE_ALIVE_STATES)},
+                        ],
                         "MaxResults": 1000,
                     },
                     generate_error=False,
                 ),
                 [EC2Instance("i-1", "ip-1", "hostname", {"ip-1"}, datetime(2020, 1, 1, tzinfo=timezone.utc))],
                 False,
-                id="custom_args",
+                id="include_head_node",
             ),
             pytest.param(
-                {"include_head_node": False, "alive_states_only": True},
+                {"include_head_node": False},
                 MockedBoto3Request(
                     method="describe_instances",
                     response={
@@ -922,7 +925,13 @@ class TestInstanceManager:
         instance_manager,
         boto3_stubber,
         job_level_scaling,
+        mocker,
     ):
+        # Mock the tracked instances file (empty file = no tracked instances)
+        mocker.patch(
+            "slurm_plugin.instance_manager.InstanceManager._read_tracked_instance_ids",
+            return_value=set(),
+        )
         # patch boto3 call
         boto3_stubber("ec2", mocked_boto3_request)
         # run test

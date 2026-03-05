@@ -27,11 +27,13 @@ from common.utils import grouper, setup_logging_filter
 from slurm_plugin.common import ComputeInstanceDescriptor, ScalingStrategy, log_exception, print_with_count
 from slurm_plugin.fleet_manager import EC2Instance, FleetManagerFactory
 from slurm_plugin.slurm_resources import (
+    CONFIG_FILE_DIR,
     EC2_HEALTH_STATUS_UNHEALTHY_STATES,
     EC2_INSTANCE_ALIVE_STATES,
     EC2_SCHEDULED_EVENT_CODES,
     EC2InstanceHealthState,
     InvalidNodenameError,
+    RUNNING_INSTANCES_FILE_PATH,
     SlurmNode,
     SlurmResumeData,
     SlurmResumeJob,
@@ -262,47 +264,68 @@ class InstanceManager:
         """
         Get instances that are associated with the cluster.
 
-        Instances without all the info set are ignored and not returned
+        Instances are retrieved in two passes:
+        1. By parallelcluster tags (primary method)
+        2. By instance IDs tracked in a local file
+
+        Instances without all the info set are ignored and not returned.
         """
-        running_instances_from_file = set()
-        running_instances_file_path = "/etc/parallelcluster/slurm_plugin/running_nodes"
-        with open(running_instances_file_path, "r") as f:
-            running_instances_from_file.update(set([line.strip() for line in f.readlines() if line.strip()]))
-        untracked_instances = running_instances_from_file.copy()
+        tracked_instance_ids = self._read_tracked_instance_ids()
+        untracked_instance_ids = tracked_instance_ids.copy()
 
         ec2_client = boto3.client("ec2", region_name=self._region, config=self._boto3_config)
         paginator = ec2_client.get_paginator("describe_instances")
-        args = {
-            "Filters": [{"Name": "tag:parallelcluster:cluster-name", "Values": [self._cluster_name]}],
-        }
-        args["Filters"].append({"Name": "instance-state-name", "Values": list(EC2_INSTANCE_ALIVE_STATES)})
+
+        # First pass: query by tags
+        filters = [
+            {"Name": "tag:parallelcluster:cluster-name", "Values": [self._cluster_name]},
+            {"Name": "instance-state-name", "Values": list(EC2_INSTANCE_ALIVE_STATES)},
+        ]
         if not include_head_node:
-            args["Filters"].append({"Name": "tag:parallelcluster:node-type", "Values": ["Compute"]})
-        response_iterator = paginator.paginate(PaginationConfig={"PageSize": BOTO3_PAGINATION_PAGE_SIZE}, **args)
+            filters.append({"Name": "tag:parallelcluster:node-type", "Values": ["Compute"]})
+
+        response_iterator = paginator.paginate(
+            PaginationConfig={"PageSize": BOTO3_PAGINATION_PAGE_SIZE}, Filters=filters
+        )
         filtered_iterator = response_iterator.search("Reservations[].Instances[]")
 
         instances = []
         for instance_info in filtered_iterator:
-            untracked_instances.discard(instance_info["InstanceId"])
+            untracked_instance_ids.discard(instance_info["InstanceId"])
             self._create_ec2_instance_object(instance_info, instances)
-        non_existing_instances = untracked_instances.copy()
-        for instance_ids in self.chunks(list(untracked_instances),150):
-            filters=[{"Name": "instance-id", "Values": instance_ids}, {"Name": "instance-state-name", "Values": list(EC2_INSTANCE_ALIVE_STATES)}]
-            response_iterator = paginator.paginate(PaginationConfig={"PageSize": BOTO3_PAGINATION_PAGE_SIZE}, Filters=filters)
-            filtered_iterator = response_iterator.search("Reservations[].Instances[]")
-            for instance_info in filtered_iterator:
-                non_existing_instances.discard(instance_info["InstanceId"])
-                self._create_ec2_instance_object(instance_info, instances)
-        with open(running_instances_file_path, "w") as f:
-            f.write('\n'.join(list(running_instances_from_file - non_existing_instances))+'\n')
+
+        # Second pass: query untracked instances by instance ID
+        if untracked_instance_ids:
+            logger.info(
+                "Found %d tracked instances not returned by tag query, querying by instance ID",
+                len(untracked_instance_ids),
+            )
+            non_existing_instance_ids = untracked_instance_ids.copy()
+            for instance_id_batch in grouper(list(untracked_instance_ids), 150):
+                batch_filters = [
+                    {"Name": "instance-id", "Values": instance_id_batch},
+                    {"Name": "instance-state-name", "Values": list(EC2_INSTANCE_ALIVE_STATES)},
+                ]
+                response_iterator = paginator.paginate(
+                    PaginationConfig={"PageSize": BOTO3_PAGINATION_PAGE_SIZE}, Filters=batch_filters
+                )
+                filtered_iterator = response_iterator.search("Reservations[].Instances[]")
+                for instance_info in filtered_iterator:
+                    non_existing_instance_ids.discard(instance_info["InstanceId"])
+                    self._create_ec2_instance_object(instance_info, instances)
+
+            # Remove terminated/non-existing instances from the tracking file
+            if non_existing_instance_ids:
+                logger.info(
+                    "Removing %d non-existing instances from tracking file", len(non_existing_instance_ids)
+                )
+                self._write_tracked_instance_ids(tracked_instance_ids - non_existing_instance_ids)
+
         return instances
 
-
-    def chunks(self, lst, n):
-        """Yield successive n-sized chunks from lst."""
-        for i in range(0, len(lst), n):
-            yield lst[i:i + n]
-    def _create_ec2_instance_object(self, instance_info, instances):
+    @staticmethod
+    def _create_ec2_instance_object(instance_info, instances):
+        """Create an EC2Instance object from DescribeInstances response data and append to instances list."""
         try:
             private_ip, private_dns_name, all_private_ips = get_private_ip_address_and_dns_name(instance_info)
             instances.append(
@@ -321,6 +344,28 @@ class InstanceManager:
                 type(e).__name__,
                 e,
             )
+
+    @staticmethod
+    def _read_tracked_instance_ids():
+        """Read tracked instance IDs from file."""
+        try:
+            with open(RUNNING_INSTANCES_FILE_PATH, "r") as f:
+                return {line.strip() for line in f if line.strip()}
+        except FileNotFoundError:
+            logger.warning("Tracked instances file %s not found, returning empty set", RUNNING_INSTANCES_FILE_PATH)
+            return set()
+        except Exception as e:
+            logger.warning("Failed to read tracked instances file: %s", e)
+            return set()
+
+    @staticmethod
+    def _write_tracked_instance_ids(instance_ids):
+        """Write tracked instance IDs to file."""
+        try:
+            with open(RUNNING_INSTANCES_FILE_PATH, "w") as f:
+                f.write("\n".join(sorted(instance_ids)) + "\n" if instance_ids else "")
+        except Exception as e:
+            logger.warning("Failed to write tracked instances file: %s", e)
 
     def terminate_all_compute_nodes(self, terminate_batch_size):
         try:

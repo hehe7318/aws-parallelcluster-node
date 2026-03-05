@@ -423,7 +423,7 @@ def test_get_ec2_instances(mocker):
     cluster_manager._get_ec2_instances()
     # Assert calls
     cluster_manager._instance_manager.get_cluster_instances.assert_called_with(
-        include_head_node=False, alive_states_only=True
+        include_head_node=False
     )
 
 
