@@ -446,6 +446,9 @@ class Ec2CreateFleetManager(FleetManager):
         attempt_count = 0
         # Wait for instances to be available in EC2
         time.sleep(0.1)
+        # TESTING ONLY: 3 minute sleep to simulate eventual consistency delay
+        logger.info("TESTING: Sleeping 180 seconds to test CreateFleet eventual consistency behavior")
+        time.sleep(180)
         while attempt_count < retries and partial_instance_ids:
             complete_instances, partial_instance_ids = self._retrieve_instances_info_from_ec2(partial_instance_ids)
             instances.extend(complete_instances)
